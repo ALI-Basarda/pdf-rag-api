@@ -6,8 +6,8 @@ from dataclasses import dataclass
 import numpy as np
 from pypdf import PdfReader
 
-# نموذج تضمين متعدد اللغات (يدعم العربية والإنجليزية) بصيغة ONNX الخفيفة
-EMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+# تضمين عبر OpenAI API (يدعم العربية والإنجليزية) بدون نموذج محلي لتبقى الذاكرة صغيرة
+EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5")
 
 
@@ -42,21 +42,27 @@ def chunk_pages(pages, size: int = 800, overlap: int = 150) -> list[Chunk]:
     return chunks
 
 
-_MODEL = None
-
-
-def _get_model():
-    """يحمّل نموذج ONNX الخفيف مرة واحدة فقط (بدون torch لتوفير الذاكرة)."""
-    global _MODEL
-    if _MODEL is None:
-        from fastembed import TextEmbedding
-
-        _MODEL = TextEmbedding(EMBED_MODEL)
-    return _MODEL
-
-
 def _embed(texts: list[str]) -> np.ndarray:
-    vecs = np.array(list(_get_model().embed(texts, batch_size=16)), dtype=np.float32)
+    """يرسل النصوص إلى OpenAI على دفعات ويرجع متجهات مطبّعة."""
+    import httpx
+    from fastapi import HTTPException
+
+    key = os.getenv("OPENAI_API_KEY")
+    if not key:
+        raise HTTPException(500, "OPENAI_API_KEY is not set on the server")
+    out = []
+    for i in range(0, len(texts), 96):
+        r = httpx.post(
+            "https://api.openai.com/v1/embeddings",
+            headers={"Authorization": f"Bearer {key}"},
+            json={"model": EMBED_MODEL, "input": texts[i:i + 96]},
+            timeout=60,
+        )
+        if r.status_code != 200:
+            raise HTTPException(502, f"Embedding API error {r.status_code}: {r.text[:200]}")
+        data = sorted(r.json()["data"], key=lambda d: d["index"])
+        out.extend(d["embedding"] for d in data)
+    vecs = np.array(out, dtype=np.float32)
     return vecs / np.linalg.norm(vecs, axis=1, keepdims=True)
 
 
