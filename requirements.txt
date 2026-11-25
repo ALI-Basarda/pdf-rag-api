@@ -1,0 +1,7 @@
+pypdf
+sentence-transformers
+numpy
+anthropic
+fastapi
+uvicorn
+python-multipart
