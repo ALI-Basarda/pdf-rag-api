@@ -6,8 +6,8 @@ from dataclasses import dataclass
 import numpy as np
 from pypdf import PdfReader
 
-# نموذج تضمين متعدد اللغات (يدعم العربية والإنجليزية)
-EMBED_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
+# نموذج تضمين متعدد اللغات (يدعم العربية والإنجليزية) بصيغة ONNX الخفيفة
+EMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5")
 
 
@@ -42,20 +42,31 @@ def chunk_pages(pages, size: int = 800, overlap: int = 150) -> list[Chunk]:
     return chunks
 
 
+_MODEL = None
+
+
+def _get_model():
+    """يحمّل نموذج ONNX الخفيف مرة واحدة فقط (بدون torch لتوفير الذاكرة)."""
+    global _MODEL
+    if _MODEL is None:
+        from fastembed import TextEmbedding
+
+        _MODEL = TextEmbedding(EMBED_MODEL)
+    return _MODEL
+
+
+def _embed(texts: list[str]) -> np.ndarray:
+    vecs = np.array(list(_get_model().embed(texts, batch_size=16)), dtype=np.float32)
+    return vecs / np.linalg.norm(vecs, axis=1, keepdims=True)
+
+
 class PDFIndex:
     def __init__(self, chunks: list[Chunk]):
-        from sentence_transformers import SentenceTransformer
-
         self.chunks = chunks
-        self.model = SentenceTransformer(EMBED_MODEL)
-        self.vectors = self.model.encode(
-            [c.text for c in chunks],
-            normalize_embeddings=True,
-            show_progress_bar=False,
-        )
+        self.vectors = _embed([c.text for c in chunks])
 
     def search(self, query: str, k: int = 5) -> list[tuple[Chunk, float]]:
-        q = self.model.encode([query], normalize_embeddings=True)[0]
+        q = _embed([query])[0]
         scores = self.vectors @ q  # الضرب النقطي = cosine لأن المتجهات مطبّعة
         top = np.argsort(-scores)[:k]
         return [(self.chunks[i], float(scores[i])) for i in top]
