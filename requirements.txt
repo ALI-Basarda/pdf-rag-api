@@ -1,5 +1,5 @@
 pypdf
-fastembed
+httpx
 numpy
 anthropic
 fastapi
